@@ -45,13 +45,14 @@ cd testing
 
 Add your CSV in the correct format to `testData.csv`.
 
-If you would like the script to run in **human like delay mode** or **show the browser**, change the following in your config.json file:
+If you would like the script to run in **human like delay mode**, **show the browser**, or **change the rest time between survey completions**, then change the following in your config.json file:
 
 ```json
 {
     "human_like_delay": false,
     "api_url": "http://localhost:5001",
-    "show_browser": false
+    "show_browser": false,
+    "rest_time": 10
 }
 ```
 
@@ -72,7 +73,11 @@ Select the option to login and run the survey together.
 2. Exit
 
 Enter your choice (1-2): 1
+
+Enter number of runs (0 for infinite): 0
 ```
+
+Select the number of runs you want to complete. If you enter 0, the script will run indefinitely.
 
 The script runs as a headless browser so no browser window will open. This is to improve speed and reduce user interference that can cause delays.
 

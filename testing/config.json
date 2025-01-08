@@ -1,5 +1,6 @@
 {
     "human_like_delay": false,
     "api_url": "http://localhost:5001",
-    "show_browser": true
+    "show_browser": false,
+    "rest_time": 10
 }

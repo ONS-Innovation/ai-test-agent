@@ -26,8 +26,7 @@ langchain = "^0.3.14"
 [tool.poetry.group.dev.dependencies]
 black = "^24.10.0"
 ruff = "^0.7.3"
-flake8 = "^7.1.1"
-isort = "^5.13.2"
+pylint = "^3.3.3"
 
 [tool.poetry.group.test.dependencies]
 selenium = "^4.15.0"

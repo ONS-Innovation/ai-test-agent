@@ -1,3 +1,10 @@
+"""Automated testing script for the AI Assist survey system.
+
+This module provides automation for running surveys through the AI Assist system,
+handling login, form filling, and data collection. It uses Selenium with undetected-chromedriver
+for browser automation and includes human-like interaction delays.
+"""
+
 import json
 import logging
 import os
@@ -6,6 +13,7 @@ import random
 import sys
 import time
 from pathlib import Path
+from typing import List, Optional
 
 import pandas as pd
 import requests
@@ -15,6 +23,12 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+# Constants
+LAST_ATTEMPT = 2
+HTTP_OK = 200
+REQUEST_TIMEOUT = 30
+MAX_RETRIES = 3
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
@@ -23,16 +37,17 @@ logging.basicConfig(
     handlers=[logging.FileHandler("automation.log"), logging.StreamHandler(sys.stdout)],
 )
 
-
-with open("config.json") as f:
+# Load configuration
+with open("config.json", encoding="utf-8") as f:
     config = json.load(f)
 human_like_delay = config["human_like_delay"]
 api_url = config["api_url"]
 show_browser = config["show_browser"]
+rest_time = config["rest_time"]
 
 
 def setup_driver():
-    """Setup Chrome with undetected-chromedriver"""
+    """Set up Chrome with undetected-chromedriver with appropriate settings."""
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
     options.add_argument("--window-size=1920,1080")
@@ -48,14 +63,15 @@ def setup_driver():
 
     # Add user agent
     options.add_argument(
-        "user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
 
     return uc.Chrome(options=options)
 
 
 def wait_and_find_element(driver, by, value, timeout=10):
-    """Wait for and return an element, with retry logic"""
+    """Wait for and return an element, with retry logic."""
     for attempt in range(3):  # Try 3 times
         try:
             element = WebDriverWait(driver, timeout).until(
@@ -63,22 +79,23 @@ def wait_and_find_element(driver, by, value, timeout=10):
             )
             return element
         except Exception as e:
-            if attempt == 2:  # Last attempt
-                logging.error(f"Failed to find element {value}: {e!s}")
+            if attempt == LAST_ATTEMPT:  # Last attempt
+                logging.error("Failed to find element %s: %s", value, str(e))
                 raise
             time.sleep(2)  # Wait before retry
 
 
 def human_like_type(element, text):
-    """Type text like a human with random delays between characters"""
+    """Type text like a human with random delays between characters."""
     for char in text:
         element.send_keys(char)
         if human_like_delay:
+            # Note: This is not for cryptographic purposes, just for human-like behavior
             time.sleep(random.uniform(0.1, 0.3))
 
 
 def click_with_retry(driver, element, max_attempts=3):
-    """Click an element with retry logic and human-like behavior"""
+    """Click an element with retry logic and human-like behavior."""
     for attempt in range(max_attempts):
         try:
             # Move mouse to element
@@ -97,16 +114,19 @@ def click_with_retry(driver, element, max_attempts=3):
         except Exception as e:
             if attempt == max_attempts - 1:
                 logging.error(
-                    f"Failed to click element after {max_attempts} attempts: {e!s}"
+                    "Failed to click element after %d attempts: %s",
+                    max_attempts,
+                    str(e),
                 )
                 raise
             time.sleep(2)
 
 
 def load_session(driver, filename="session.pkl"):
-    """Load the session cookies from a file"""
+    """Load the session cookies from a file."""
     logging.info("Loading session data...")
     try:
+        # Note: Only load pickle files from trusted sources
         with open(filename, "rb") as f:
             session_data = pickle.load(f)
 
@@ -119,12 +139,12 @@ def load_session(driver, filename="session.pkl"):
         logging.error("No session file found. Please login first.")
         return False
     except Exception as e:
-        logging.error(f"Error loading session: {e!s}")
+        logging.error("Error loading session: %s", str(e))
         return False
 
 
 def move_row_to_tested(row_data):
-    """Move a row from testData.csv to testedData.csv"""
+    """Move a row from testData.csv to testedData.csv."""
     tested_file = Path("testedData.csv")
 
     # Create testedData.csv if it doesn't exist
@@ -144,37 +164,36 @@ def move_row_to_tested(row_data):
 
 
 def wait_for_element(driver, by, value, timeout=10, message=None):
-    """Wait for an element to be present and visible"""
+    """Wait for an element to be present and visible."""
     try:
         element = WebDriverWait(driver, timeout).until(
             EC.presence_of_element_located((by, value))
         )
-        # time.sleep(1)  # Standard 1 second wait after finding element
         return element
     except Exception as e:
         if message:
-            logging.error(f"{message}: {e!s}")
+            logging.error("%s: %s", message, str(e))
         raise
 
 
 def wait_for_url(driver, url_pattern, timeout=30):
-    """Wait for URL to match pattern"""
+    """Wait for URL to match pattern."""
     try:
         WebDriverWait(driver, timeout).until(lambda d: url_pattern in d.current_url)
         return True
-    except:
+    except Exception as e:
+        logging.error("Failed to reach URL containing %s: %s", url_pattern, str(e))
         return False
 
 
 def extract_sic_data(driver):
-    """Extract SIC codes and justification from results page"""
+    """Extract SIC codes and justification from results page."""
     final_sic = wait_for_element(driver, By.CSS_SELECTOR, "#final-sic ul li").text
     final_justification = wait_for_element(driver, By.CSS_SELECTOR, "#final-sic p").text
 
     # Switch to Initial SIC tab
     initial_tab = wait_for_element(driver, By.CSS_SELECTOR, "#tab_sic")
     initial_tab.click()
-    # time.sleep(1)
 
     initial_sic = wait_for_element(driver, By.CSS_SELECTOR, "#sic ul li").text
 
@@ -186,22 +205,24 @@ def extract_sic_data(driver):
 
 
 def extract_question_text(driver):
-    """Extract question text from the page"""
+    """Extract question text from the page."""
     try:
         question = driver.find_element(By.CSS_SELECTOR, "#fieldset-legend-title").text
         return question
-    except:
+    except Exception as e:
+        logging.error("Failed to extract question text: %s", str(e))
         return None
 
 
 def extract_selected_radio_value(driver):
-    """Extract the selected radio button value"""
+    """Extract the selected radio button value."""
     try:
         selected_radio = driver.find_element(
             By.CSS_SELECTOR, "input[type='radio']:checked"
         )
         return selected_radio.get_attribute("value")
-    except:
+    except Exception as e:
+        logging.error("Failed to extract selected radio value: %s", str(e))
         return None
 
 
@@ -210,9 +231,9 @@ def get_ai_response(
     job_description: str,
     organization: str,
     question: str,
-    choices: list = None,
+    choices: Optional[List[str]] = None,
 ) -> str:
-    """Call the AI API to get a response"""
+    """Call the AI API to get a response for the survey question."""
     try:
         payload = {
             "job_title": job_title,
@@ -224,19 +245,23 @@ def get_ai_response(
         if choices:
             payload["choices"] = choices
 
-        response = requests.post(api_url + "/survey", json=payload)
+        response = requests.post(
+            api_url + "/survey", json=payload, timeout=REQUEST_TIMEOUT
+        )
 
-        if response.status_code == 200:
+        if response.status_code == HTTP_OK:
             return response.json()["response"]
-        else:
-            logging.error(f"API Error: {response.json().get('error', 'Unknown error')}")
-            return None
 
-    except Exception as e:
-        logging.error(f"Failed to get AI response: {e!s}")
+        logging.error("API Error: %s", response.json().get("error", "Unknown error"))
         return None
 
-def login():
+    except Exception as e:
+        logging.error("Failed to get AI response: %s", str(e))
+        return None
+
+
+def login() -> Optional[uc.Chrome]:
+    """Log into the survey system and return the configured browser driver."""
     # Get environment variables
     email = os.getenv("EMAIL")
     password = os.getenv("PASSWORD")
@@ -275,8 +300,9 @@ def login():
             )
             if error_message.is_displayed():
                 logging.error("Login failed: Invalid credentials")
-                return
-        except:
+                return None
+        except Exception as e:
+            logging.debug("No error message found: %s", str(e))
             logging.info("Login successful")
 
         # Accept additional cookies if present
@@ -287,20 +313,33 @@ def login():
             if accept_cookies_button.is_displayed():
                 logging.info("Accepting additional cookies...")
                 click_with_retry(driver, accept_cookies_button)
-        except:
+        except Exception as e:
+            logging.debug("No additional cookies to accept: %s", str(e))
             logging.info("No additional cookies to accept.")
+
         return driver
+
     except Exception as e:
-        logging.error(f"Failed to login: {e!s}")
-        return
+        logging.error("Failed to login: %s", str(e))
+        try:
+            driver.quit()
+        except Exception as quit_error:
+            logging.debug("Failed to quit driver: %s", str(quit_error))
+        return None
 
 
-def run_login_and_survey(driver):
-    """Handle both login and survey in one session"""
+def run_login_and_survey(driver: uc.Chrome) -> bool:
+    """Handle a complete survey session, from start to finish.
+
+    Args:
+        driver: The configured Chrome driver instance.
+
+    Returns:
+        bool: True if survey completed successfully, False if it needs to be retried.
+    """
     logging.info("Starting combined login and survey process...")
-    max_retries = 3
     retry_count = 0
-    
+
     try:
         # Start Survey Process
         logging.info("Starting survey process...")
@@ -313,13 +352,13 @@ def run_login_and_survey(driver):
         logging.info("Reading data from CSV...")
         csv_path = Path("testData.csv")
         if not csv_path.exists():
-            logging.error(f"CSV file not found at {csv_path}")
-            return
+            logging.error("CSV file not found at %s", csv_path)
+            return False
 
         df = pd.read_csv(csv_path)
         if len(df) == 0:
             logging.error("No more data in testData.csv")
-            return
+            return False
 
         # Create a copy of the first row to avoid the SettingWithCopyWarning
         row_data = df.iloc[0].copy()
@@ -376,8 +415,12 @@ def run_login_and_survey(driver):
         save_button.click()
 
         # Wait for survey assist page with retry logic
-        while retry_count < max_retries:
-            logging.info(f"Waiting for survey assist page... (Attempt {retry_count + 1}/{max_retries})")
+        while retry_count < MAX_RETRIES:
+            logging.info(
+                "Waiting for survey assist page... (Attempt %d/%d)",
+                retry_count + 1,
+                MAX_RETRIES,
+            )
             try:
                 if not wait_for_url(driver, "/survey_assist", timeout=30):
                     logging.warning("Failed to reach survey assist page, retrying...")
@@ -394,14 +437,19 @@ def run_login_and_survey(driver):
                         if error_element and '{"error":"0"}' in error_element[0].text:
                             logging.error("Found error state on page")
                             return False
-                            
+
                         question1 = wait_and_find_element(
-                            driver, By.CSS_SELECTOR, "#fieldset-legend-title", timeout=20
+                            driver,
+                            By.CSS_SELECTOR,
+                            "#fieldset-legend-title",
+                            timeout=20,
                         ).text
                         if question1:
                             break
                     except Exception as e:
-                        logging.warning(f"Attempt {attempt + 1}/3 to find question failed: {str(e)}")
+                        logging.warning(
+                            f"Attempt {attempt + 1}/3 to find question failed: {e!s}"
+                        )
                         driver.refresh()
                         time.sleep(2)
 
@@ -413,13 +461,13 @@ def run_login_and_survey(driver):
                 row_data["TEST question 1"] = question1
                 break
             except Exception as e:
-                logging.error(f"Error in survey assist page: {str(e)}")
+                logging.error("Error in survey assist page: %s", str(e))
                 retry_count += 1
-                if retry_count >= max_retries:
+                if retry_count >= MAX_RETRIES:
                     logging.error("Max retries reached. Starting over...")
                     return False
 
-        if retry_count >= max_retries:
+        if retry_count >= MAX_RETRIES:
             return False
 
         # Get AI response for question 1
@@ -479,7 +527,6 @@ def run_login_and_survey(driver):
             question=question2,
             choices=radio_choices,
         )
-        
 
         if response2 is None:
             # Fallback to manual input if AI fails
@@ -564,7 +611,7 @@ def run_login_and_survey(driver):
         # Wait for summary page
         if not wait_for_url(driver, "/summary", timeout=30):
             logging.error("Failed to reach summary page")
-            return
+            return False
 
         # Click submit
         submit_button = wait_and_find_element(driver, By.ID, "submit-button")
@@ -573,7 +620,7 @@ def run_login_and_survey(driver):
         # Wait for results page
         if not wait_for_url(driver, "/survey_assist_results", timeout=30):
             logging.error("Failed to reach results page")
-            return
+            return False
 
         # Extract SIC data
         logging.info("Extracting SIC codes and justification...")
@@ -604,7 +651,7 @@ def run_login_and_survey(driver):
             logging.info(f"Final SIC: {row_data['FINAL SIC']}")
         except Exception as e:
             logging.error(f"Failed to extract SIC data: {e!s}")
-            return
+            return False
 
         # Click submit
         submit_button = wait_and_find_element(driver, By.ID, "submit-button")
@@ -617,7 +664,7 @@ def run_login_and_survey(driver):
         # Wait for start survey page
         if not wait_for_url(driver, "/", timeout=30):
             logging.error("Failed to return to start page")
-            return
+            return False
 
         # Move the processed row to testedData.csv
         logging.info("Moving processed data to testedData.csv...")
@@ -626,22 +673,45 @@ def run_login_and_survey(driver):
         # Start new survey
         # start_button = wait_and_find_element(driver, By.CSS_SELECTOR, 'a[href="/survey"]')
         # start_button.click()
+    except Exception as e:
+        logging.error("Error in survey process: %s", str(e))
+        return False
     finally:
-        logging.info("Finished survey. Giving the server a rest for 5 seconds...")
-        time.sleep(5)
+        logging.info(
+            "Finished survey. Giving the server a rest for %d seconds...", rest_time
+        )
+        time.sleep(rest_time)
+
+    return True
 
 
-def run_survey():
+def run_survey(num_runs: int = 0) -> None:
+    """Run the survey process for a specified number of times or indefinitely.
+    
+    Args:
+        num_runs: Number of surveys to run. If 0, runs indefinitely.
+    """
     driver = login()
     if not driver:
         logging.error("Failed to login")
         return
-        
-    while True:
+
+    runs_completed = 0
+    while num_runs == 0 or runs_completed < num_runs:
         try:
             result = run_login_and_survey(driver)
-            if result is False:
-                logging.info("Survey failed. The server couldn't keep up, please slow down. Attempting to restart...")
+            if result:
+                runs_completed += 1
+                logging.info(
+                    "Completed run %d%s", 
+                    runs_completed,
+                    f" of {num_runs}" if num_runs > 0 else ""
+                )
+            if not result:
+                logging.info(
+                    "Survey failed. The server couldn't keep up, please slow down. "
+                    "Attempting to restart..."
+                )
                 driver.quit()
                 time.sleep(5)
                 driver = login()
@@ -650,39 +720,41 @@ def run_survey():
                     return
                 continue
         except Exception as e:
-            logging.error(f"Unexpected error in survey: {str(e)}")
-            try:
+            logging.error("Unexpected error in survey: %s", str(e))
+            from contextlib import suppress
+
+            with suppress(Exception):
                 driver.quit()
-            except:
-                pass
             time.sleep(5)
             driver = login()
             if not driver:
                 logging.error("Failed to re-login after error")
                 return
 
+    logging.info("Survey runs completed: %d", runs_completed)
 
-def show_menu():
-    """Display the main menu"""
+
+def show_menu() -> None:
+    """Display and handle the main menu interface."""
     while True:
-        print(
-            """\n=== AI ASSIST AUTOMATION ===
-
-Please make sure you have exported your email and password as environment variables.
-
-You will have to manually enter 2 questions in the survey.
-
-============================
-        """
-        )
-
+        print("\n=== AI ASSIST AUTOMATION ===\n")
         print("1. Login and Run Survey Together")
         print("2. Exit")
 
         choice = input("\nEnter your choice (1-2): ")
 
         if choice == "1":
-            run_survey()
+            while True:
+                try:
+                    num_runs = input("\nEnter number of runs (0 for infinite): ")
+                    num_runs = int(num_runs)
+                    if num_runs < 0:
+                        print("Please enter a non-negative number")
+                        continue
+                    break
+                except ValueError:
+                    print("Please enter a valid number")
+            run_survey(num_runs)
         elif choice == "2":
             print("Goodbye!")
             break
