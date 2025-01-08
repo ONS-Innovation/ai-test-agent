@@ -10,6 +10,12 @@ make install
 
 Make sure you have the necessary google cloud credentials in the `service-account.json` file.
 
+Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to the path of the `service-account.json` file.
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+```
+
 Run the API:
 
 ```bash

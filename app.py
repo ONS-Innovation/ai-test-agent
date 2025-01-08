@@ -2,9 +2,9 @@ from typing import List, Optional
 
 from flask import Flask, jsonify, request
 from google.oauth2 import service_account
-from langchain.chains import LLMChain
-from langchain.memory import ConversationBufferMemory
-from langchain.prompts import PromptTemplate
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.runnables import RunnablePassthrough
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 app = Flask(__name__)
@@ -25,16 +25,8 @@ class SurveyAgent:
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-pro", google_auth_credentials=credentials, temperature=0.7
         )
-
-        self.memory = ConversationBufferMemory(
-            input_key="input",
-            memory_key="chat_history",
-            return_messages=True,
-            output_key="response",
-        )
-
+        self.messages = []
         self.job_context = None
-        self.chain = None
 
     def set_job_context(self, job_title: str, job_description: str, organization: str):
         """Set the job context for the agent"""
@@ -44,69 +36,48 @@ class SurveyAgent:
         Job Description: {job_description}
         Organization's Activity: {organization}
         """
+        # Add context as system message
+        self.messages = [HumanMessage(content=self.job_context)]
 
     def _create_open_ended_chain(self):
         """Create chain for open-ended questions"""
-        prompt = PromptTemplate(
-            input_variables=["input", "chat_history", "context"],
-            template="""
-            {context}
+        prompt = ChatPromptTemplate.from_messages([
+            MessagesPlaceholder(variable_name="history"),
+            ("human", """
+            Please provide a brief and focused answer to the following question based on your professional role and experience.
+            Keep your response to 1-2 sentences maximum.
             
-            You are participating in a survey. Please answer the following question 
-            based on your professional role and experience. Keep your answer brief and focused,
-            ideally 1-2 sentences.
-            
-            Previous conversation:
-            {chat_history}
-            
-            Question: {input}
-            
-            Answer:""",
-        )
-        return self._create_chain_with_prompt(prompt)
+            Question: {question}
+            """)
+        ])
+        
+        chain = prompt | self.llm
+        return chain
 
     def _create_multiple_choice_chain(self, choices: List[str]):
         """Create chain for multiple choice questions"""
-        choices_text = "\n".join([f"- {choice}" for choice in choices])
-        prompt = PromptTemplate(
-            input_variables=["input", "chat_history", "context"],
-            template="""
-            {context}
-            
-            You are participating in a survey. Please select the most appropriate answer 
-            from the following choices based on your professional role and experience.
-            You MUST choose one of the provided options, even if none seem perfect.
-            If unsure, choose 'none of the above' if available, or the closest match.
+        # Format choices as a numbered list instead of bullet points
+        choices_text = "\n".join([f"{i+1}. {choice}" for i, choice in enumerate(choices)])
+        
+        prompt = ChatPromptTemplate.from_messages([
+            MessagesPlaceholder(variable_name="history"),
+            ("human", """
+            STRICT INSTRUCTION: You MUST select and return ONLY ONE of the exact options listed below.
+            Do not add any explanation, do not modify the text, do not add any other text.
+            If none of the options seem perfect, choose 'none of the above' or the closest match.
+            Your response must be a VERBATIM COPY of one of the options (without the number prefix).
 
             Available choices:
-            {choices_text}
-            
-            Previous conversation:
-            {chat_history}
-            
-            Question: {input}
-            
-            Instructions:
-            1. You MUST select one of the exact options listed above
-            2. Return ONLY the exact text of your chosen option
-            3. Do not add any explanation or additional text
-            4. If unsure, choose 'none of the above' if available
-            
-            Selected answer:""".replace(
-                "{choices_text}", choices_text
-            ),
-        )
-        return self._create_chain_with_prompt(prompt)
+            {choices}
 
-    def _create_chain_with_prompt(self, prompt):
-        """Create a chain with the given prompt"""
-        return LLMChain(
-            llm=self.llm,
-            prompt=prompt,
-            memory=self.memory,
-            output_key="response",
-            verbose=True,
-        )
+            Question: {question}
+
+            Select exactly one option from above (without the number):
+            """)
+        ])
+        
+        chain = prompt | self.llm
+        return chain
 
     def ask_question(self, question: str, choices: Optional[List[str]] = None) -> str:
         """Ask a question to the agent"""
@@ -114,15 +85,29 @@ class SurveyAgent:
             raise ValueError("Job context must be set before asking questions")
 
         # Create appropriate chain based on question type
-        self.chain = (
+        chain = (
             self._create_multiple_choice_chain(choices)
             if choices
             else self._create_open_ended_chain()
         )
 
-        response = self.chain.invoke({"input": question, "context": self.job_context})
+        # Prepare input variables
+        input_variables = {
+            "history": self.messages,
+            "question": question,
+        }
+        if choices:
+            # Format choices as numbered list to match the prompt
+            input_variables["choices"] = "\n".join([f"{i+1}. {choice}" for i, choice in enumerate(choices)])
 
-        return response["response"]
+        # Add the question to message history
+        response = chain.invoke(input_variables)
+
+        # Update message history
+        self.messages.append(HumanMessage(content=question))
+        self.messages.append(AIMessage(content=response.content))
+
+        return response.content
 
 
 # Create global agent instance

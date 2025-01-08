@@ -234,11 +234,7 @@ def get_ai_response(
         logging.error(f"Failed to get AI response: {e!s}")
         return None
 
-
-def run_login_and_survey():
-    """Handle both login and survey in one session"""
-    logging.info("Starting combined login and survey process...")
-
+def login():
     # Get environment variables
     email = os.getenv("EMAIL")
     password = os.getenv("PASSWORD")
@@ -291,7 +287,19 @@ def run_login_and_survey():
                 click_with_retry(driver, accept_cookies_button)
         except:
             logging.info("No additional cookies to accept.")
+        return driver
+    except Exception as e:
+        logging.error(f"Failed to login: {e!s}")
+        return
 
+
+def run_login_and_survey(driver):
+    """Handle both login and survey in one session"""
+    logging.info("Starting combined login and survey process...")
+    max_retries = 3
+    retry_count = 0
+    
+    try:
         # Start Survey Process
         logging.info("Starting survey process...")
 
@@ -370,19 +378,46 @@ def run_login_and_survey():
         save_button = wait_and_find_element(driver, By.ID, "save-values-button")
         save_button.click()
 
-        # Wait for survey assist page
-        logging.info("Waiting for survey assist page...")
-        if not wait_for_url(driver, "/survey_assist", timeout=30):
-            logging.error("Failed to reach survey assist page within 30 seconds")
-            return
+        # Wait for survey assist page with retry logic
+        while retry_count < max_retries:
+            logging.info(f"Waiting for survey assist page... (Attempt {retry_count + 1}/{max_retries})")
+            try:
+                if not wait_for_url(driver, "/survey_assist", timeout=30):
+                    logging.warning("Failed to reach survey assist page, retrying...")
+                    retry_count += 1
+                    continue
 
-        # Handle first question
-        logging.info("Handling first survey assist question...")
-        question1 = wait_and_find_element(
-            driver, By.CSS_SELECTOR, "#fieldset-legend-title", timeout=30
-        ).text
-        logging.info(f"\n\033[92mQuestion 1: {question1}\033[0m")
-        row_data["TEST question 1"] = question1
+                # Handle first question
+                logging.info("Handling first survey assist question...")
+                question1 = None
+                for attempt in range(3):
+                    try:
+                        question1 = wait_and_find_element(
+                            driver, By.CSS_SELECTOR, "#fieldset-legend-title", timeout=20
+                        ).text
+                        if question1:
+                            break
+                    except Exception as e:
+                        logging.warning(f"Attempt {attempt + 1}/3 to find question failed: {str(e)}")
+                        driver.refresh()
+                        time.sleep(5)
+
+                if not question1:
+                    logging.error("Failed to find question after all attempts")
+                    raise Exception("Could not find survey question")
+
+                logging.info(f"\n\033[92mQuestion 1: {question1}\033[0m")
+                row_data["TEST question 1"] = question1
+                break
+            except Exception as e:
+                logging.error(f"Error in survey assist page: {str(e)}")
+                retry_count += 1
+                if retry_count >= max_retries:
+                    logging.error("Max retries reached. Starting over...")
+                    return False
+
+        if retry_count >= max_retries:
+            return False
 
         # Get AI response for question 1
         response1 = get_ai_response(
@@ -398,16 +433,15 @@ def run_login_and_survey():
         else:
             logging.info(f"\033[94mAi Response: {response1}\033[0m")
             # Optional: Allow user to override AI response
-            override = input(
-                "\nPress Enter to accept AI response or type a new response: "
-            )
-            if override.strip():
-                response1 = override
+            # override = input(
+            #     "\nPress Enter to accept AI response or type a new response: "
+            # )
+            # if override.strip():
+            #     response1 = override
 
         # Find and fill the text input
         input_field = wait_and_find_element(driver, By.ID, "resp-ai-assist-followup")
         input_field.send_keys(response1)
-        logging.info(f"Entered: {response1}")
         row_data["Question response 1"] = response1
 
         # Click save and continue
@@ -442,6 +476,7 @@ def run_login_and_survey():
             question=question2,
             choices=radio_choices,
         )
+        
 
         if response2 is None:
             # Fallback to manual input if AI fails
@@ -459,16 +494,17 @@ def run_login_and_survey():
         else:
             # Find the index of the AI's chosen option
             try:
+                print(response2)
                 choice = radio_choices.index(response2) + 1
                 logging.info(f"\033[94mAi chose option {choice}: {response2}\033[0m")
 
                 # Optional: Allow user to override AI choice
-                override = input(
-                    "\nPress Enter to accept AI choice or enter a new number: "
-                )
-                if override.strip():
-                    choice = int(override)
-                    response2 = radio_choices[choice - 1]
+                # override = input(
+                #     "\nPress Enter to accept AI choice or enter a new number: "
+                # )
+                # if override.strip():
+                #     choice = int(override)
+                #     response2 = radio_choices[choice - 1]
             except (ValueError, IndexError):
                 logging.error("AI response didn't match any available options")
                 while True:
@@ -567,6 +603,10 @@ def run_login_and_survey():
             logging.error(f"Failed to extract SIC data: {e!s}")
             return
 
+        # Click submit
+        submit_button = wait_and_find_element(driver, By.ID, "submit-button")
+        submit_button.click()
+
         # Click finish
         finish_button = wait_and_find_element(driver, By.ID, "submit-button")
         finish_button.click()
@@ -583,17 +623,39 @@ def run_login_and_survey():
         # Start new survey
         # start_button = wait_and_find_element(driver, By.CSS_SELECTOR, 'a[href="/survey"]')
         # start_button.click()
-
     finally:
-        driver.quit()
+        logging.info("Finished survey.")
 
 
 def run_survey():
+    driver = login()
+    if not driver:
+        logging.error("Failed to login")
+        return
+        
     while True:
-        run_login_and_survey()
-        choice = input("Run program again? (Y/n): ")
-        if choice == "n":
-            break
+        try:
+            result = run_login_and_survey(driver)
+            if result is False:
+                logging.info("Survey failed, attempting to restart...")
+                driver.quit()
+                time.sleep(5)
+                driver = login()
+                if not driver:
+                    logging.error("Failed to re-login after failure")
+                    return
+                continue
+        except Exception as e:
+            logging.error(f"Unexpected error in survey: {str(e)}")
+            try:
+                driver.quit()
+            except:
+                pass
+            time.sleep(5)
+            driver = login()
+            if not driver:
+                logging.error("Failed to re-login after error")
+                return
 
 
 def show_menu():
