@@ -28,6 +28,7 @@ with open("config.json") as f:
     config = json.load(f)
 human_like_delay = config["human_like_delay"]
 api_url = config["api_url"]
+show_browser = config["show_browser"]
 
 
 def setup_driver():
@@ -42,7 +43,8 @@ def setup_driver():
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-extensions")
     options.add_argument("--start-maximized")
-    options.add_argument("--headless=new")
+    if not show_browser:
+        options.add_argument("--headless=new")
 
     # Add user agent
     options.add_argument(
@@ -306,7 +308,6 @@ def run_login_and_survey(driver):
         # Navigate to survey page
         logging.info("Navigating to survey page...")
         driver.get("https://tlfs-poc.ai-assist.gcp.onsdigital.uk/survey")
-        time.sleep(1)
 
         # Read the CSV file
         logging.info("Reading data from CSV...")
@@ -327,11 +328,9 @@ def run_login_and_survey(driver):
         logging.info("Answering paid job question...")
         yes_radio = wait_and_find_element(driver, By.ID, "paid-job-yes")
         yes_radio.click()
-        time.sleep(1)
 
         save_button = wait_and_find_element(driver, By.ID, "save-values-button")
         save_button.click()
-        time.sleep(1)
 
         # Job title question
         logging.info(
@@ -339,11 +338,9 @@ def run_login_and_survey(driver):
         )
         job_title_field = wait_and_find_element(driver, By.ID, "job-title")
         job_title_field.send_keys(row_data["soc2020_job_title_main_job"])
-        time.sleep(1)
 
         save_button = wait_and_find_element(driver, By.ID, "save-values-button")
         save_button.click()
-        time.sleep(1)
 
         # Job description question
         logging.info(
@@ -392,6 +389,12 @@ def run_login_and_survey(driver):
                 question1 = None
                 for attempt in range(3):
                     try:
+                        # Check for error state first
+                        error_element = driver.find_elements(By.CSS_SELECTOR, "pre")
+                        if error_element and '{"error":"0"}' in error_element[0].text:
+                            logging.error("Found error state on page")
+                            return False
+                            
                         question1 = wait_and_find_element(
                             driver, By.CSS_SELECTOR, "#fieldset-legend-title", timeout=20
                         ).text
@@ -400,7 +403,7 @@ def run_login_and_survey(driver):
                     except Exception as e:
                         logging.warning(f"Attempt {attempt + 1}/3 to find question failed: {str(e)}")
                         driver.refresh()
-                        time.sleep(5)
+                        time.sleep(2)
 
                 if not question1:
                     logging.error("Failed to find question after all attempts")
@@ -624,7 +627,8 @@ def run_login_and_survey(driver):
         # start_button = wait_and_find_element(driver, By.CSS_SELECTOR, 'a[href="/survey"]')
         # start_button.click()
     finally:
-        logging.info("Finished survey.")
+        logging.info("Finished survey. Giving the server a rest for 5 seconds...")
+        time.sleep(5)
 
 
 def run_survey():
@@ -637,7 +641,7 @@ def run_survey():
         try:
             result = run_login_and_survey(driver)
             if result is False:
-                logging.info("Survey failed, attempting to restart...")
+                logging.info("Survey failed. The server couldn't keep up, please slow down. Attempting to restart...")
                 driver.quit()
                 time.sleep(5)
                 driver = login()
