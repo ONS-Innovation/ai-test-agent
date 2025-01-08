@@ -45,12 +45,13 @@ cd testing
 
 Add your CSV in the correct format to `testData.csv`.
 
-If you would like the script to run in human like delay mode, change the following in your config.json file:
+If you would like the script to run in **human like delay mode** or **show the browser**, change the following in your config.json file:
 
 ```json
 {
-    "human_like_delay": true,
-    "api_url": "http://localhost:5001"
+    "human_like_delay": false,
+    "api_url": "http://localhost:5001",
+    "show_browser": false
 }
 ```
 
